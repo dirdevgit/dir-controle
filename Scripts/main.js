@@ -314,9 +314,18 @@ function atualizarInterfaceAcesso() {
     identificandoOverlay.classList.add('hidden');
 
     let paginaAtual = '';
-    ['dashboard-page','search-page','info-page','profile-page','admin-panel-page'].forEach(id => {
+
+    const paginas = {
+        'dashboard-page': 'dashboard',
+        'search-page': 'search',
+        'info-page': 'info',
+        'profile-page': 'profile',
+        'admin-panel-page': 'admin'
+    };
+    
+    Object.entries(paginas).forEach(([id, nome]) => {
         const el = document.getElementById(id);
-        if (el && !el.classList.contains('hidden')) paginaAtual = id.replace('-page','');
+        if (el && !el.classList.contains('hidden')) paginaAtual = nome;
     });
 
     if (!temAcesso()) {
@@ -368,7 +377,7 @@ function atualizarInterfaceAcesso() {
         };
         const m = pageMap[paginaAtual];
         if (m) {
-            document.getElementById(m[0]).classList.remove('hidden');
+            document.getElementById(m[0])?.classList.remove('hidden');
             if (m[1]) document.getElementById(m[1])?.classList.add('active');
             setHeaderTitle(m[2]);
             if (['search-page','info-page','profile-page'].includes(m[0])) fixLayoutWidthToHeader(m[0]);
