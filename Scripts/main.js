@@ -1271,31 +1271,60 @@ function closeModal() {
 }
 
 function switchPage(pageId) {
-    ['dashboard-page','search-page','info-page','profile-page','admin-panel-page'].forEach(id => document.getElementById(id).classList.add('hidden'));
-    ['menu-dashboard','menu-search','menu-info','menu-admin'].forEach(id => { const el = document.getElementById(id); if (el) el.classList.remove('active'); });
+    ['dashboard-page','search-page','info-page','profile-page','admin-panel-page'].forEach(id => {
+        document.getElementById(id)?.classList.add('hidden');
+    });
+
+    ['menu-dashboard','menu-search','menu-info','menu-admin'].forEach(id => {
+        document.getElementById(id)?.classList.remove('active');
+    });
+
     document.getElementById('drawer-menu-admin')?.classList.remove('active');
     document.getElementById('header-profile-card')?.classList.remove('active');
 
     if (pageId === 'dashboard') {
-        document.getElementById('dashboard-page').classList.remove('hidden');
+        document.getElementById('dashboard-page')?.classList.remove('hidden');
         document.getElementById('menu-dashboard')?.classList.add('active');
         setHeaderTitle('CONTROLE DE INFORMAÇÕES');
+
     } else if (pageId === 'search') {
-        document.getElementById('search-page').classList.remove('hidden');
+        document.getElementById('search-page')?.classList.remove('hidden');
         fixLayoutWidthToHeader('search-page');
         document.getElementById('menu-search')?.classList.add('active');
         setHeaderTitle('POSTAGENS');
+
     } else if (pageId === 'info') {
-        document.getElementById('info-page').classList.remove('hidden');
+        document.getElementById('info-page')?.classList.remove('hidden');
         fixLayoutWidthToHeader('info-page');
         document.getElementById('menu-info')?.classList.add('active');
         setHeaderTitle('INFORMAÇÕES');
+
+    } else if (pageId === 'admin') {
+        if (!isMod()) {
+            switchPage('dashboard');
+            return;
+        }
+
+        document.getElementById('admin-panel-page')?.classList.remove('hidden');
+        document.getElementById('menu-admin')?.classList.add('active');
+        document.getElementById('drawer-menu-admin')?.classList.add('active');
+        setHeaderTitle('PAINEL DE CONTROLE');
+        renderAdminPanel();
     }
 
-    ['dashboard','search','info','admin'].forEach(id =>
-        document.getElementById('mobitem-' + id)?.classList.remove('active'));
+    ['dashboard','search','info','admin'].forEach(id => {
+        document.getElementById('mobitem-' + id)?.classList.remove('active');
+    });
+
     document.getElementById('mobitem-' + pageId)?.classList.add('active');
-    const titles = { dashboard: 'CONTROLE DE INFORMAÇÕES', search: 'POSTAGENS', info: 'INFORMAÇÕES' };
+
+    const titles = {
+        dashboard: 'CONTROLE DE INFORMAÇÕES',
+        search: 'POSTAGENS',
+        info: 'INFORMAÇÕES',
+        admin: 'PAINEL DE CONTROLE'
+    };
+
     const titleEl = document.getElementById('mob-topbar-title');
     if (titleEl) titleEl.textContent = titles[pageId] || '';
 
