@@ -168,70 +168,43 @@ function iniciarAtualizacaoEmTempoReal() {
         unsubscribeFirebase();
         unsubscribeFirebase = null;
     }
-    _realtimeAtivo = false;
 
     const dbRef = ref(db, 'dados_sistema');
 
-    const tentarConectar = () => {
-        unsubscribeFirebase = onValue(dbRef, (snapshot) => {
-            if (!snapshot.exists()) return;
-            const novosDados = snapshot.val();
-            const novoSnapshot = JSON.stringify(novosDados);
-            if (_ultimoSnapshot === novoSnapshot) return;
-            _ultimoSnapshot = novoSnapshot;
-            _realtimeAtivo = true;
-            atualizarIndicadorRealtime(true);
-
-            DADOS = novosDados;
-            if (!DADOS.usuarios) DADOS.usuarios = [];
-            if (!DADOS.relatorios) DADOS.relatorios = [];
-            if (!DADOS.acompanhamentos) DADOS.acompanhamentos = [];
-            if (!DADOS.log_acoes) DADOS.log_acoes = [];
-            if (!DADOS.acessos_membros) DADOS.acessos_membros = {};
-            if (!DADOS.config_grupos) DADOS.config_grupos = null;
-
-            aplicarConfigGrupos();
-            atualizarInterfaceAcesso();
-            if (temAcesso()) {
-                atualizarTodasInterfaces();
-                if (!document.getElementById('admin-panel-page').classList.contains('hidden')) renderAdminPanel();
-            }
-        }, (error) => {
-            console.error('Erro no listener realtime:', error);
-            _realtimeAtivo = false;
-            atualizarIndicadorRealtime(false);
-            setTimeout(tentarConectar, 5000);
-        });
+    const normalizarDados = () => {
+        if (!DADOS.usuarios) DADOS.usuarios = [];
+        if (!DADOS.relatorios) DADOS.relatorios = [];
+        if (!DADOS.acompanhamentos) DADOS.acompanhamentos = [];
+        if (!DADOS.log_acoes) DADOS.log_acoes = [];
+        if (!DADOS.acessos_membros) DADOS.acessos_membros = {};
+        if (!DADOS.config_grupos) DADOS.config_grupos = null;
     };
 
-    tentarConectar();
+    unsubscribeFirebase = onValue(dbRef, (snapshot) => {
+        if (!snapshot.exists()) return;
 
-    setInterval(() => {
-        if (!_realtimeAtivo) {
-            atualizarIndicadorRealtime(false);
-            if (unsubscribeFirebase) unsubscribeFirebase();
-            tentarConectar();
+        const novosDados = snapshot.val();
+        const novoSnapshot = JSON.stringify(novosDados);
+        if (_ultimoSnapshot === novoSnapshot) return;
+
+        _ultimoSnapshot = novoSnapshot;
+        DADOS = novosDados;
+        normalizarDados();
+
+        aplicarConfigGrupos();
+        atualizarInterfaceAcesso();
+
+        if (temAcesso()) {
+            atualizarTodasInterfaces();
+
+            const adminPage = document.getElementById('admin-panel-page');
+            if (adminPage && !adminPage.classList.contains('hidden')) {
+                renderAdminPanel();
+            }
         }
-    }, 15000);
-}
-
-function atualizarIndicadorRealtime(ativo) {
-    let indicator = document.getElementById('realtime-indicator');
-    if (!indicator) {
-        indicator = document.createElement('div');
-        indicator.id = 'realtime-indicator';
-        indicator.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:9999;display:flex;align-items:center;gap:6px;background:#1f1f1f;border:1px solid #333;border-radius:20px;padding:5px 10px;font-size:10px;font-family:Poppins,sans-serif;cursor:default;transition:opacity 0.3s;opacity:0.7;';
-        document.body.appendChild(indicator);
-    }
-    indicator.innerHTML = ativo
-        ? `<span style="width:7px;height:7px;border-radius:50%;background:#85e300;display:inline-block;box-shadow:0 0 6px #85e300;animation:pulse-rt 1.5s infinite;"></span><span style="color:#85e300;">Tempo real</span>`
-        : `<span style="width:7px;height:7px;border-radius:50%;background:#ff4757;display:inline-block;"></span><span style="color:#ff4757;">Reconectando...</span>`;
-    if (!document.getElementById('rt-pulse-style')) {
-        const s = document.createElement('style');
-        s.id = 'rt-pulse-style';
-        s.textContent = `@keyframes pulse-rt{0%,100%{opacity:1}50%{opacity:0.4}}`;
-        document.head.appendChild(s);
-    }
+    }, (error) => {
+        console.error('Erro no listener realtime:', error);
+    });
 }
 
 async function pegarUsername() {
@@ -342,7 +315,8 @@ function atualizarInterfaceAcesso() {
 
     let paginaAtual = '';
     ['dashboard-page','search-page','info-page','profile-page','admin-panel-page'].forEach(id => {
-        if (!document.getElementById(id).classList.contains('hidden')) paginaAtual = id.replace('-page','');
+        const el = document.getElementById(id);
+        if (el && !el.classList.contains('hidden')) paginaAtual = id.replace('-page','');
     });
 
     if (!temAcesso()) {
@@ -379,7 +353,9 @@ function atualizarInterfaceAcesso() {
     }
 
     if (paginaAtual) {
-        ['dashboard-page','search-page','info-page','profile-page','admin-panel-page'].forEach(id => document.getElementById(id).classList.add('hidden'));
+        ['dashboard-page','search-page','info-page','profile-page','admin-panel-page'].forEach(id => {
+            document.getElementById(id)?.classList.add('hidden');
+        });
         ['menu-dashboard','menu-search','menu-info','menu-admin'].forEach(id => { const el = document.getElementById(id); if (el) el.classList.remove('active'); });
         document.getElementById('drawer-menu-admin')?.classList.remove('active');
 
@@ -556,10 +532,28 @@ function podeExcluirRelatorio(rel) {
 }
 
 function atualizarTodasInterfaces() {
-    renderRegistered(); renderFollowUps(); renderActions(); renderRanking(); renderStatistics();
-    ['posts','info'].forEach(mode => { renderFeed(mode); renderPagination(mode); renderProfile(mode); });
-    if (state.profile.user) { renderProfileSidebar(); renderProfileFeed(); renderProfilePagination(); }
-    if (!document.getElementById('admin-panel-page').classList.contains('hidden')) renderAdminPanel();
+    renderRegistered();
+    renderFollowUps();
+    renderActions();
+    renderRanking();
+    renderStatistics();
+
+    ['posts', 'info'].forEach(mode => {
+        renderFeed(mode);
+        renderPagination(mode);
+        renderProfile(mode);
+    });
+
+    if (state.profile.user) {
+        renderProfileSidebar();
+        renderProfileFeed();
+        renderProfilePagination();
+    }
+
+    const adminPage = document.getElementById('admin-panel-page');
+    if (adminPage && !adminPage.classList.contains('hidden')) {
+        renderAdminPanel();
+    }
 }
 
 function renderRegistered() {
@@ -591,7 +585,27 @@ function renderFollowUps() {
 function renderActions() {
     const list = document.getElementById('action-list');
     if (!list) return;
-    const ultimasAcoes = [...DADOS.log_acoes].sort((a, b) => new Date(b.data) - new Date(a.data)).slice(0, 3);
+
+    const tiposPermitidos = [
+        'registro_executivo',
+        'exclusao_executivo',
+        'atualizacao_status',
+        'novo_relatorio',
+        'edicao_relatorio',
+        'exclusao_relatorio',
+        'transferencia_responsabilidade'
+    ];
+
+    const ultimasAcoes = [...(DADOS.log_acoes || [])]
+        .filter(a => tiposPermitidos.includes(a.tipo))
+        .sort((a, b) => new Date(b.data) - new Date(a.data))
+        .slice(0, 3);
+
+    if (ultimasAcoes.length === 0) {
+        list.innerHTML = '<div style="color:#888;text-align:center;padding:15px 0;">Sem ações recentes.</div>';
+        return;
+    }
+
     list.innerHTML = ultimasAcoes.map(a => `
         <div class="action-item">
             <div class="action-avatar"><img src="${avatarHeadUrl(a.responsavel || a.autor || '')}" /></div>
