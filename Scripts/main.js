@@ -1,3 +1,7 @@
+if ('caches' in window) {
+    caches.keys().then(keys => keys.forEach(key => caches.delete(key)));
+}
+
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getDatabase, ref, get, set, onValue, update } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
