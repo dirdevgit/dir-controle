@@ -18,13 +18,17 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-const GRUPOS = [
-    { id: 9,   nome: 'Corregedoria', tag: 'COR', url: '/g9-corregedoria', chave: 'cor', isAdm: true },
-    { id: 110, nome: 'Grupamento de Ações Táticas Especiais', tag: 'GATE', url: '/g110-grupamento-de-acoes-taticas-especiais', chave: 'gate', isAdm: true },
-    { id: 721, nome: 'Procuradoria Militar de Justiça', tag: 'PMJ', url: '/g721-procuradoria-militar-de-justica', chave: 'pmj', isAdm: true },
-    { id: 146, nome: 'Diretoria do Corpo Executivo', tag: 'DIR', url: '/g146-diretoria-do-corpo-executivo', chave: 'dir', isAdm: true },
-    { id: 268, nome: '[CE] Especialização Intermediária', tag: 'EI', url: '/g268-ce-especializacao-intermediaria', chave: 'ei', isAdm: false },
+const GRUPOS_DEFAULT = [
+    { id: 9,   nome: 'Corregedoria', tag: 'COR', url: '/g9-corregedoria', chave: 'cor', nivel: 'adm' },
+    { id: 110, nome: 'Grupamento de Ações Táticas Especiais', tag: 'GATE', url: '/g110-grupamento-de-acoes-taticas-especiais', chave: 'gate', nivel: 'adm' },
+    { id: 721, nome: 'Procuradoria Militar de Justiça', tag: 'PMJ', url: '/g721-procuradoria-militar-de-justica', chave: 'pmj', nivel: 'adm' },
+    { id: 146, nome: 'Diretoria do Corpo Executivo', tag: 'DIR', url: '/g146-diretoria-do-corpo-executivo', chave: 'dir', nivel: 'adm' },
+    { id: 268, nome: '[CE] Especialização Intermediária', tag: 'EI', url: '/g268-ce-especializacao-intermediaria', chave: 'ei', nivel: 'leitura' },
 ];
+
+let GRUPOS = [...GRUPOS_DEFAULT];
+
+const NIVEIS = ['adm', 'mod', 'leitura'];
 
 const PRIORIDADE_CARGO = ['gate', 'cor', 'pmj', 'dir', 'ei'];
 
@@ -42,7 +46,8 @@ let DADOS = {
     acompanhamentos: [],
     log_acoes: [],
     estatisticas: { total_usuarios: 0, total_relatorios: 0, usuarios_hoje: 0 },
-    acessos_membros: {}
+    acessos_membros: {},
+    config_grupos: null
 };
 
 let USUARIO_ATUAL = '';
@@ -50,6 +55,8 @@ let CARGOS_USUARIO = [];
 const PAGE_SIZE = 3;
 const state = { posts: { page: 1, filter: '' }, info: { page: 1, filter: '' }, profile: { page: 1, user: '' } };
 let unsubscribeFirebase = null;
+let _realtimeAtivo = false;
+let _ultimoSnapshot = '';
 
 function showToast(message, type = 'success') {
     const container = document.getElementById('toast-container');
@@ -108,7 +115,18 @@ function tempoRelativo(dataString) {
 function obterDadosIniciais() {
     return { usuarios: [], relatorios: [], acompanhamentos: [], log_acoes: [],
              estatisticas: { total_usuarios: 0, total_relatorios: 0, usuarios_hoje: 0 },
-             acessos_membros: {} };
+             acessos_membros: {}, config_grupos: null };
+}
+
+function aplicarConfigGrupos() {
+    if (DADOS.config_grupos) {
+        GRUPOS = GRUPOS_DEFAULT.map(g => {
+            const cfg = DADOS.config_grupos[g.chave];
+            return cfg ? { ...g, nivel: cfg.nivel } : g;
+        });
+    } else {
+        GRUPOS = [...GRUPOS_DEFAULT];
+    }
 }
 
 async function carregarDados() {
@@ -122,6 +140,7 @@ async function carregarDados() {
             if (!DADOS.log_acoes) DADOS.log_acoes = [];
             if (!DADOS.estatisticas) DADOS.estatisticas = { total_usuarios: 0, total_relatorios: 0, usuarios_hoje: 0 };
             if (!DADOS.acessos_membros) DADOS.acessos_membros = {};
+            if (!DADOS.config_grupos) DADOS.config_grupos = null;
         } else {
             DADOS = obterDadosIniciais();
             await salvarDados();
@@ -130,6 +149,7 @@ async function carregarDados() {
         console.error('Erro ao carregar dados:', erro);
         DADOS = obterDadosIniciais();
     }
+    aplicarConfigGrupos();
     atualizarInterfaceAcesso();
     if (temAcesso()) {
         atualizarTodasInterfaces();
@@ -144,25 +164,74 @@ async function salvarDados() {
 }
 
 function iniciarAtualizacaoEmTempoReal() {
-    if (unsubscribeFirebase) unsubscribeFirebase();
+    if (unsubscribeFirebase) {
+        unsubscribeFirebase();
+        unsubscribeFirebase = null;
+    }
+    _realtimeAtivo = false;
+
     const dbRef = ref(db, 'dados_sistema');
-    unsubscribeFirebase = onValue(dbRef, (snapshot) => {
-        if (!snapshot.exists()) return;
-        const novosDados = snapshot.val();
-        if (JSON.stringify(DADOS) !== JSON.stringify(novosDados)) {
+
+    const tentarConectar = () => {
+        unsubscribeFirebase = onValue(dbRef, (snapshot) => {
+            if (!snapshot.exists()) return;
+            const novosDados = snapshot.val();
+            const novoSnapshot = JSON.stringify(novosDados);
+            if (_ultimoSnapshot === novoSnapshot) return;
+            _ultimoSnapshot = novoSnapshot;
+            _realtimeAtivo = true;
+            atualizarIndicadorRealtime(true);
+
             DADOS = novosDados;
             if (!DADOS.usuarios) DADOS.usuarios = [];
             if (!DADOS.relatorios) DADOS.relatorios = [];
             if (!DADOS.acompanhamentos) DADOS.acompanhamentos = [];
             if (!DADOS.log_acoes) DADOS.log_acoes = [];
             if (!DADOS.acessos_membros) DADOS.acessos_membros = {};
+            if (!DADOS.config_grupos) DADOS.config_grupos = null;
+
+            aplicarConfigGrupos();
             atualizarInterfaceAcesso();
             if (temAcesso()) {
                 atualizarTodasInterfaces();
                 if (!document.getElementById('admin-panel-page').classList.contains('hidden')) renderAdminPanel();
             }
+        }, (error) => {
+            console.error('Erro no listener realtime:', error);
+            _realtimeAtivo = false;
+            atualizarIndicadorRealtime(false);
+            setTimeout(tentarConectar, 5000);
+        });
+    };
+
+    tentarConectar();
+
+    setInterval(() => {
+        if (!_realtimeAtivo) {
+            atualizarIndicadorRealtime(false);
+            if (unsubscribeFirebase) unsubscribeFirebase();
+            tentarConectar();
         }
-    });
+    }, 15000);
+}
+
+function atualizarIndicadorRealtime(ativo) {
+    let indicator = document.getElementById('realtime-indicator');
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'realtime-indicator';
+        indicator.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:9999;display:flex;align-items:center;gap:6px;background:#1f1f1f;border:1px solid #333;border-radius:20px;padding:5px 10px;font-size:10px;font-family:Poppins,sans-serif;cursor:default;transition:opacity 0.3s;opacity:0.7;';
+        document.body.appendChild(indicator);
+    }
+    indicator.innerHTML = ativo
+        ? `<span style="width:7px;height:7px;border-radius:50%;background:#85e300;display:inline-block;box-shadow:0 0 6px #85e300;animation:pulse-rt 1.5s infinite;"></span><span style="color:#85e300;">Tempo real</span>`
+        : `<span style="width:7px;height:7px;border-radius:50%;background:#ff4757;display:inline-block;"></span><span style="color:#ff4757;">Reconectando...</span>`;
+    if (!document.getElementById('rt-pulse-style')) {
+        const s = document.createElement('style');
+        s.id = 'rt-pulse-style';
+        s.textContent = `@keyframes pulse-rt{0%,100%{opacity:1}50%{opacity:0.4}}`;
+        document.head.appendChild(s);
+    }
 }
 
 async function pegarUsername() {
@@ -207,12 +276,19 @@ async function detectarCargosUsuario(username) {
 
 function temAcesso() { return CARGOS_USUARIO.length > 0; }
 
-function isAdm() {
-    return CARGOS_USUARIO.some(c => {
-        const g = GRUPOS.find(g => g.chave === c);
-        return g && g.isAdm;
-    });
+function getNivelUsuario() {
+    for (const chave of PRIORIDADE_CARGO) {
+        if (CARGOS_USUARIO.includes(chave)) {
+            const g = GRUPOS.find(g => g.chave === chave);
+            if (g) return g.nivel;
+        }
+    }
+    return 'leitura';
 }
+
+function isAdm() { return getNivelUsuario() === 'adm'; }
+function isMod() { return getNivelUsuario() === 'adm' || getNivelUsuario() === 'mod'; }
+function isDIR() { return CARGOS_USUARIO.includes('dir'); }
 
 function getCargoPrincipal(cargos) {
     for (const p of PRIORIDADE_CARGO) { if (cargos.includes(p)) return p; }
@@ -244,12 +320,18 @@ async function registrarAcesso(username, cargos) {
         total_acessos: (existente?.total_acessos || 0) + 1
     };
 
+    registrarLog({ tipo: 'acesso', nick: username, responsavel: username, cargos });
+
     try {
         await update(ref(db, `dados_sistema/acessos_membros/${chaveSegura}`), DADOS.acessos_membros[chaveSegura]);
-        if (ehPrimeiroLogin) {
-            showToast(`Bem-vindo, ${username}! Primeiro acesso registrado.`, 'success');
-        }
+        if (ehPrimeiroLogin) showToast(`Bem-vindo, ${username}! Primeiro acesso registrado.`, 'success');
     } catch (e) { console.error('Erro ao registrar acesso:', e); }
+}
+
+function registrarLog(entry) {
+    const agora = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    DADOS.log_acoes = DADOS.log_acoes || [];
+    DADOS.log_acoes.push({ ...entry, data: agora });
 }
 
 function atualizarInterfaceAcesso() {
@@ -285,13 +367,10 @@ function atualizarInterfaceAcesso() {
     const drawerAdmin = document.getElementById('drawer-menu-admin');
     const mobItemAdmin = document.getElementById('mobitem-admin');
 
-    if (isAdm()) {
+    if (isMod()) {
         menuAdmin?.classList.remove('hidden');
         drawerAdmin?.classList.remove('hidden');
-        if (mobItemAdmin) {
-            mobItemAdmin.style.display = 'flex';
-            mobItemAdmin.classList.remove('hidden');
-        }
+        if (mobItemAdmin) { mobItemAdmin.style.display = 'flex'; mobItemAdmin.classList.remove('hidden'); }
     } else {
         menuAdmin?.classList.add('hidden');
         drawerAdmin?.classList.add('hidden');
@@ -328,21 +407,20 @@ function atualizarPerfilInterface() {
     const principal = getCargoPrincipal(CARGOS_USUARIO);
     const tagsHtml = CARGOS_USUARIO.map(c => { const g = GRUPOS.find(g => g.chave === c); return g ? g.tag : ''; }).filter(Boolean).join('/');
 
-    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
     const setSrc = (id, src) => { const el = document.getElementById(id); if (el) el.src = src; };
     const setClass = (id, cls) => { const el = document.getElementById(id); if (el) el.className = cls; };
 
-    set('header-profile-name', USUARIO_ATUAL);
-    set('drawer-profile-name', USUARIO_ATUAL);
-    set('header-profile-role', tagsHtml || 'Membro');
-    set('drawer-profile-role', tagsHtml || 'Membro');
+    setEl('header-profile-name', USUARIO_ATUAL);
+    setEl('drawer-profile-name', USUARIO_ATUAL);
+    setEl('header-profile-role', tagsHtml || 'Membro');
+    setEl('drawer-profile-role', tagsHtml || 'Membro');
     setClass('header-profile-role', 'profile-sub ' + (principal || ''));
     setClass('drawer-profile-role', 'profile-sub ' + (principal || ''));
     setSrc('header-profile-avatar', avatarUrl(USUARIO_ATUAL));
     setSrc('drawer-profile-avatar', avatarUrl(USUARIO_ATUAL));
-
-    set('mob-menu-nick', USUARIO_ATUAL);
-    set('mob-menu-role', tagsHtml || 'Membro');
+    setEl('mob-menu-nick', USUARIO_ATUAL);
+    setEl('mob-menu-role', tagsHtml || 'Membro');
     setSrc('mob-menu-avatar', avatarHeadUrl(USUARIO_ATUAL));
 }
 
@@ -350,7 +428,7 @@ async function registrarExecutivo(nick, autor) {
     const existe = DADOS.usuarios.some(u => u.nick.toLowerCase() === nick.toLowerCase());
     if (existe) { showToast(`Executivo ${nick} já está registrado!`, 'warning'); return false; }
     DADOS.usuarios.push({ nick, status: "Acompanhado/Auxiliado", data_registro: new Date().toISOString().split('T')[0], registrado_por: autor, responsavel: autor });
-    DADOS.log_acoes.push({ tipo: "registro_executivo", nick, responsavel: autor, data: new Date().toISOString().replace('T',' ').slice(0,19) });
+    registrarLog({ tipo: "registro_executivo", nick, responsavel: autor });
     DADOS.estatisticas.total_usuarios = DADOS.usuarios.length;
     DADOS.estatisticas.usuarios_hoje = (DADOS.estatisticas.usuarios_hoje || 0) + 1;
     const sucesso = await salvarDados();
@@ -365,7 +443,7 @@ async function excluirExecutivo(nick, autor) {
     if (index === -1) { showToast(`Executivo ${nick} não encontrado!`, 'error'); return false; }
     DADOS.usuarios.splice(index, 1);
     DADOS.acompanhamentos = DADOS.acompanhamentos.filter(a => a.executivo.toLowerCase() !== nick.toLowerCase());
-    DADOS.log_acoes.push({ tipo: "exclusao_executivo", nick, responsavel: autor, data: new Date().toISOString().replace('T',' ').slice(0,19) });
+    registrarLog({ tipo: "exclusao_executivo", nick, responsavel: autor });
     DADOS.estatisticas.total_usuarios = DADOS.usuarios.length;
     const sucesso = await salvarDados();
     if (sucesso) { showToast(`Executivo ${nick} excluído!`); return true; }
@@ -375,12 +453,12 @@ async function excluirExecutivo(nick, autor) {
 async function postarRelatorio(autor, alvo, texto, print_url) {
     const novoId = gerarIdRelatorio();
     DADOS.relatorios.unshift({ id: novoId, autor, alvo, texto, print: print_url || "", data: new Date().toISOString().replace('T',' ').slice(0,19) });
-    DADOS.log_acoes.push({ tipo: "novo_relatorio", id: novoId, autor, alvo, responsavel: autor, data: new Date().toISOString().replace('T',' ').slice(0,19) });
+    registrarLog({ tipo: "novo_relatorio", id: novoId, autor, alvo, responsavel: autor });
     DADOS.estatisticas.total_relatorios = DADOS.relatorios.length;
     const usuarioExistente = DADOS.usuarios.find(u => u.nick.toLowerCase() === alvo.toLowerCase());
     if (!usuarioExistente) {
         DADOS.usuarios.push({ nick: alvo, status: "Acompanhado/Auxiliado", data_registro: new Date().toISOString().split('T')[0], registrado_por: autor, responsavel: autor });
-        DADOS.log_acoes.push({ tipo: "registro_executivo", nick: alvo, responsavel: autor, data: new Date().toISOString().replace('T',' ').slice(0,19) });
+        registrarLog({ tipo: "registro_executivo", nick: alvo, responsavel: autor });
         DADOS.estatisticas.total_usuarios = DADOS.usuarios.length;
         DADOS.estatisticas.usuarios_hoje = (DADOS.estatisticas.usuarios_hoje || 0) + 1;
         if (!DADOS.acompanhamentos.some(a => a.executivo.toLowerCase() === alvo.toLowerCase()))
@@ -400,9 +478,11 @@ async function postarRelatorio(autor, alvo, texto, print_url) {
 async function editarRelatorio(id, novoTexto, novoPrint) {
     const rel = DADOS.relatorios.find(r => r.id === id);
     if (!rel) { showToast('Relatório não encontrado!', 'error'); return false; }
-    rel.texto = novoTexto; rel.print = novoPrint || rel.print;
-    rel.editado_em = new Date().toISOString().replace('T',' ').slice(0,19); rel.editado_por = USUARIO_ATUAL;
-    DADOS.log_acoes.push({ tipo: "edicao_relatorio", id, responsavel: USUARIO_ATUAL, data: new Date().toISOString().replace('T',' ').slice(0,19) });
+    rel.texto = novoTexto;
+    rel.print = novoPrint || rel.print;
+    rel.editado_em = new Date().toISOString().replace('T',' ').slice(0,19);
+    rel.editado_por = USUARIO_ATUAL;
+    registrarLog({ tipo: "edicao_relatorio", id, responsavel: USUARIO_ATUAL });
     const sucesso = await salvarDados();
     if (sucesso) { showToast(`Relatório ${id} editado!`); return true; }
     return false;
@@ -415,7 +495,7 @@ async function excluirRelatorio(id) {
     if (index === -1) { showToast('Relatório não encontrado!', 'error'); return false; }
     DADOS.relatorios.splice(index, 1);
     DADOS.estatisticas.total_relatorios = DADOS.relatorios.length;
-    DADOS.log_acoes.push({ tipo: "exclusao_relatorio", id, responsavel: USUARIO_ATUAL, data: new Date().toISOString().replace('T',' ').slice(0,19) });
+    registrarLog({ tipo: "exclusao_relatorio", id, responsavel: USUARIO_ATUAL });
     const sucesso = await salvarDados();
     if (sucesso) { showToast(`Relatório ${id} excluído!`); return true; }
     return false;
@@ -427,7 +507,7 @@ async function atualizarStatusExecutivo(nick, novoStatus, autor) {
     if (!podeAlterarStatusExecutivo(nick)) { showToast(`Sem permissão para alterar o status de ${nick}.`, 'error'); return false; }
     const statusAnterior = usuario.status;
     usuario.status = novoStatus;
-    DADOS.log_acoes.push({ tipo: "atualizacao_status", nick, status_anterior: statusAnterior, status_novo: novoStatus, responsavel: autor, data: new Date().toISOString().replace('T',' ').slice(0,19) });
+    registrarLog({ tipo: "atualizacao_status", nick, status_anterior: statusAnterior, status_novo: novoStatus, responsavel: autor });
     if (novoStatus === "Não tem interesse" || novoStatus === "Livre") {
         DADOS.acompanhamentos = DADOS.acompanhamentos.filter(a => a.executivo.toLowerCase() !== nick.toLowerCase());
         if (novoStatus === "Livre") usuario.responsavel = null;
@@ -450,7 +530,7 @@ async function transferirResponsabilidade(nick, novoResponsavel, autor) {
     usuario.responsavel = novoResponsavel;
     const acompIdx = DADOS.acompanhamentos.findIndex(a => a.executivo.toLowerCase() === nick.toLowerCase());
     if (acompIdx !== -1) DADOS.acompanhamentos[acompIdx].responsavel = novoResponsavel;
-    DADOS.log_acoes.push({ tipo: "transferencia_responsabilidade", nick, responsavel_anterior: responsavelAnterior, responsavel_novo: novoResponsavel, responsavel: autor, data: new Date().toISOString().replace('T',' ').slice(0,19) });
+    registrarLog({ tipo: "transferencia_responsabilidade", nick, responsavel_anterior: responsavelAnterior, responsavel_novo: novoResponsavel, responsavel: autor });
     const sucesso = await salvarDados();
     if (sucesso) { showToast(`Responsabilidade transferida para ${novoResponsavel}`); return true; }
     return false;
@@ -461,6 +541,18 @@ function podeAlterarStatusExecutivo(nick) {
     if (!usuario) return true;
     if (isAdm()) return true;
     return usuario.responsavel && usuario.responsavel.toLowerCase() === USUARIO_ATUAL.toLowerCase();
+}
+
+function podeEditarRelatorio(rel) {
+    if (!rel) return false;
+    if (isAdm()) return true;
+    return rel.autor && rel.autor.toLowerCase() === USUARIO_ATUAL.toLowerCase();
+}
+
+function podeExcluirRelatorio(rel) {
+    if (!rel) return false;
+    if (isAdm()) return true;
+    return rel.autor && rel.autor.toLowerCase() === USUARIO_ATUAL.toLowerCase();
 }
 
 function atualizarTodasInterfaces() {
@@ -512,6 +604,7 @@ function renderActions() {
 
 function formatarLogAcao(log) {
     switch (log.tipo) {
+        case 'acesso': return `${log.nick} acessou o sistema`;
         case 'registro_executivo': return `${log.responsavel} registrou ${log.nick}`;
         case 'exclusao_executivo': return `${log.responsavel} excluiu ${log.nick}`;
         case 'atualizacao_status': return `${log.responsavel} alterou status de ${log.nick}`;
@@ -519,6 +612,9 @@ function formatarLogAcao(log) {
         case 'edicao_relatorio': return `${log.responsavel} editou ${log.id}`;
         case 'exclusao_relatorio': return `${log.responsavel} excluiu ${log.id}`;
         case 'transferencia_responsabilidade': return `${log.responsavel} transferiu ${log.nick} → ${log.responsavel_novo}`;
+        case 'config_grupo': return `${log.responsavel} alterou nível de ${log.tag} para ${log.nivel}`;
+        case 'nav_pagina': return `${log.nick} navegou para ${log.pagina}`;
+        case 'busca': return `${log.nick} buscou "${log.query}" em ${log.modo}`;
         default: return `Ação: ${log.tipo}`;
     }
 }
@@ -546,11 +642,12 @@ function renderStatistics() {
 }
 
 function renderAdminPanel() {
-    if (!isAdm()) return;
+    if (!isMod()) return;
     renderAdminPostagens();
     renderAdminUsuarios();
     renderAdminMembrosAcesso();
     renderAdminStatBar();
+    renderAdminLogs();
 }
 
 function renderAdminStatBar() {
@@ -595,6 +692,96 @@ function renderAdminMembrosAcesso() {
     }).join('');
 }
 
+function renderAdminLogs() {
+    let container = document.getElementById('admin-logs-container');
+    if (!container) {
+        const adminPage = document.getElementById('admin-panel-page');
+        if (!adminPage) return;
+        const col = adminPage.querySelector('.column');
+        if (!col) return;
+
+        const wrapper = document.createElement('div');
+        wrapper.id = 'admin-logs-wrapper';
+        wrapper.style.cssText = 'background:#1f1f1f;border-radius:10px;padding:16px;box-sizing:border-box;margin-top:20px;';
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;';
+        header.innerHTML = `
+            <h4 style="color:#7CFF9B;margin:0;">LOG DE AÇÕES</h4>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <select id="log-filter-tipo" style="background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-family:Poppins,sans-serif;">
+                    <option value="">Todos os tipos</option>
+                    <option value="acesso">Acessos</option>
+                    <option value="registro_executivo">Registros</option>
+                    <option value="exclusao_executivo">Exclusões (exec)</option>
+                    <option value="atualizacao_status">Status</option>
+                    <option value="novo_relatorio">Postagens</option>
+                    <option value="edicao_relatorio">Edições</option>
+                    <option value="exclusao_relatorio">Exclusões (rel)</option>
+                    <option value="transferencia_responsabilidade">Transferências</option>
+                    <option value="config_grupo">Config grupos</option>
+                    <option value="nav_pagina">Navegação</option>
+                    <option value="busca">Buscas</option>
+                </select>
+                <input id="log-filter-nick" placeholder="Filtrar por nick..." style="background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-family:Poppins,sans-serif;width:140px;" />
+            </div>`;
+
+        container = document.createElement('div');
+        container.id = 'admin-logs-container';
+        container.style.cssText = 'max-height:350px;overflow-y:auto;';
+
+        wrapper.appendChild(header);
+        wrapper.appendChild(container);
+        col.appendChild(wrapper);
+
+        document.getElementById('log-filter-tipo')?.addEventListener('input', renderAdminLogs);
+        document.getElementById('log-filter-nick')?.addEventListener('input', renderAdminLogs);
+    }
+
+    const tipoFiltro = document.getElementById('log-filter-tipo')?.value || '';
+    const nickFiltro = (document.getElementById('log-filter-nick')?.value || '').toLowerCase();
+
+    const logs = [...(DADOS.log_acoes || [])].sort((a, b) => new Date(b.data) - new Date(a.data));
+    const filtrados = logs.filter(l => {
+        const tipoOk = !tipoFiltro || l.tipo === tipoFiltro;
+        const nick = (l.nick || l.responsavel || l.autor || '').toLowerCase();
+        const nickOk = !nickFiltro || nick.includes(nickFiltro);
+        return tipoOk && nickOk;
+    }).slice(0, 100);
+
+    const iconMap = {
+        acesso: 'ph-sign-in', registro_executivo: 'ph-user-plus', exclusao_executivo: 'ph-user-minus',
+        atualizacao_status: 'ph-arrows-clockwise', novo_relatorio: 'ph-file-plus', edicao_relatorio: 'ph-pencil',
+        exclusao_relatorio: 'ph-trash', transferencia_responsabilidade: 'ph-arrows-left-right',
+        config_grupo: 'ph-gear', nav_pagina: 'ph-navigation-arrow', busca: 'ph-magnifying-glass'
+    };
+    const colorMap = {
+        acesso: '#85e300', registro_executivo: '#7CFF9B', exclusao_executivo: '#ff4757',
+        atualizacao_status: '#ffa502', novo_relatorio: '#1e90ff', edicao_relatorio: '#a29bfe',
+        exclusao_relatorio: '#ff6b81', transferencia_responsabilidade: '#fd79a8',
+        config_grupo: '#fdcb6e', nav_pagina: '#636e72', busca: '#74b9ff'
+    };
+
+    if (filtrados.length === 0) {
+        container.innerHTML = '<div style="color:#888;text-align:center;padding:20px 0;">Nenhum log encontrado.</div>';
+        return;
+    }
+
+    container.innerHTML = filtrados.map(l => {
+        const icon = iconMap[l.tipo] || 'ph-activity';
+        const color = colorMap[l.tipo] || '#ccc';
+        const nick = l.responsavel || l.autor || l.nick || '?';
+        return `
+        <div style="display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-bottom:1px solid rgba(255,255,255,0.05);font-size:11px;">
+            <i class="ph ${icon}" style="color:${color};font-size:14px;flex-shrink:0;margin-top:1px;"></i>
+            <div style="flex:1;min-width:0;">
+                <div style="color:#ddd;">${formatarLogAcao(l)}</div>
+                <div style="color:#555;font-size:9px;margin-top:2px;">${formatarData(l.data)} · ${nick}</div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
 function renderAdminPostagens() {
     const container = document.getElementById('admin-postagens-list');
     if (!container) return;
@@ -629,6 +816,9 @@ function renderAdminUsuarios() {
     if (!usersList) return;
     const query = (document.getElementById('admin-search-users')?.value || '').toLowerCase();
     const filtrados = query ? DADOS.usuarios.filter(u => u.nick.toLowerCase().includes(query)) : DADOS.usuarios;
+
+    const podeExcluir = isAdm();
+
     usersList.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:0 8px;">
             <div style="font-size:11px;color:#fff;">Total: <strong>${DADOS.usuarios.length}</strong></div>
@@ -644,9 +834,13 @@ function renderAdminUsuarios() {
                             <div style="font-size:10px;color:#888;">Responsável: ${u.responsavel || '-x-'}</div>
                         </div>
                     </div>
-                    <button onclick="window.abrirTransferenciaResponsavel('${u.nick}')" style="background:#1a2a0a;color:#85e300;border:1px solid #85e300;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;" title="Alterar responsável"><i class="ph ph-arrows-left-right"></i></button>
+                    <div style="display:flex;gap:4px;">
+                        ${isAdm() ? `<button onclick="window.abrirTransferenciaResponsavel('${u.nick}')" style="background:#1a2a0a;color:#85e300;border:1px solid #85e300;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;" title="Alterar responsável"><i class="ph ph-arrows-left-right"></i></button>` : ''}
+                        ${podeExcluir ? `<button onclick="window.excluirExecutivoDireto('${u.nick}')" style="background:#2a0a0a;color:#ff4757;border:1px solid #ff4757;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;" title="Excluir executivo"><i class="ph ph-trash"></i></button>` : ''}
+                    </div>
                 </div>
             </div>`).join('')}`;
+
     if (filtrados.length === 0) usersList.innerHTML += '<div style="color:#888;text-align:center;padding:20px 0;">Nenhum executivo encontrado.</div>';
     document.getElementById('admin-search-users')?.addEventListener('input', () => renderAdminUsuarios());
 }
@@ -679,6 +873,16 @@ function renderProfile(mode) {
     }
 }
 
+function botoesAcaoRelatorio(item) {
+    const podEditar = podeEditarRelatorio(item);
+    const podExcluir = podeExcluirRelatorio(item);
+    if (!podEditar && !podExcluir) return '';
+    return `<div style="display:flex;gap:6px;margin-top:8px;">
+        ${podEditar ? `<button onclick="window.abrirEdicaoRelatorio('${item.id}')" style="background:#2a2a2a;color:#85e300;border:1px solid #85e300;padding:3px 10px;border-radius:4px;font-size:10px;cursor:pointer;"><i class="ph ph-pencil"></i> Editar</button>` : ''}
+        ${podExcluir ? `<button onclick="window.excluirRelatorio('${item.id}')" style="background:#2a0a0a;color:#ff4757;border:1px solid #ff4757;padding:3px 10px;border-radius:4px;font-size:10px;cursor:pointer;"><i class="ph ph-trash"></i> Excluir</button>` : ''}
+    </div>`;
+}
+
 function renderFeed(mode) {
     const listEl = document.getElementById(`feed-list-${mode}`);
     const data = getFilteredData(mode);
@@ -694,11 +898,6 @@ function renderFeed(mode) {
         let showReadMore = false;
         if (texto.length > MAX_CHARS) { texto = texto.slice(0, MAX_CHARS) + '...'; showReadMore = true; }
         const editadoLabel = item.editado_em ? `<span style="font-size:9px;color:#888;margin-left:8px;">(editado)</span>` : '';
-        const acoesAdm = isAdm() ? `
-            <div style="display:flex;gap:6px;margin-top:8px;">
-                <button onclick="window.abrirEdicaoRelatorio('${item.id}')" style="background:#2a2a2a;color:#85e300;border:1px solid #85e300;padding:3px 10px;border-radius:4px;font-size:10px;cursor:pointer;"><i class="ph ph-pencil"></i> Editar</button>
-                <button onclick="window.excluirRelatorio('${item.id}')" style="background:#2a0a0a;color:#ff4757;border:1px solid #ff4757;padding:3px 10px;border-radius:4px;font-size:10px;cursor:pointer;"><i class="ph ph-trash"></i> Excluir</button>
-            </div>` : '';
         return `
             <div class="feed-item">
                 <div class="feed-header-badge">${headerName} - ${formatarData(item.data)} <span style="font-size:9px;color:#85e300;margin-left:6px;">${item.id}</span>${editadoLabel}</div>
@@ -708,7 +907,7 @@ function renderFeed(mode) {
                         <p>${texto}</p>
                         ${showReadMore ? `<button class='ler-mais-btn' onclick='this.previousElementSibling.textContent = ${JSON.stringify(item.texto)}; this.style.display = "none";'>Ler mais</button>` : ''}
                         ${item.print ? `<p>Print: <a href="${item.print}" style="color:#7CFF9B;" target="_blank" rel="noopener noreferrer">Clique aqui</a></p>` : ''}
-                        ${acoesAdm}
+                        ${botoesAcaoRelatorio(item)}
                     </div>
                 </div>
             </div>`;
@@ -769,11 +968,6 @@ function renderProfileFeed() {
         let showReadMore = false;
         if (texto.length > MAX_CHARS) { texto = texto.slice(0, MAX_CHARS) + '...'; showReadMore = true; }
         const editadoLabel = item.editado_em ? `<span style="font-size:9px;color:#888;margin-left:8px;">(editado)</span>` : '';
-        const acoesAdm = isAdm() ? `
-            <div style="display:flex;gap:6px;margin-top:8px;">
-                <button onclick="window.abrirEdicaoRelatorio('${item.id}')" style="background:#2a2a2a;color:#85e300;border:1px solid #85e300;padding:3px 10px;border-radius:4px;font-size:10px;cursor:pointer;"><i class="ph ph-pencil"></i> Editar</button>
-                <button onclick="window.excluirRelatorio('${item.id}')" style="background:#2a0a0a;color:#ff4757;border:1px solid #ff4757;padding:3px 10px;border-radius:4px;font-size:10px;cursor:pointer;"><i class="ph ph-trash"></i> Excluir</button>
-            </div>` : '';
         return `
             <div class="feed-item">
                 <div class="feed-header-badge">${item.alvo} - ${formatarData(item.data)} <span style="font-size:9px;color:#85e300;margin-left:6px;">${item.id}</span>${editadoLabel}</div>
@@ -783,7 +977,7 @@ function renderProfileFeed() {
                         <p>${texto}</p>
                         ${showReadMore ? `<button class='ler-mais-btn' onclick='this.previousElementSibling.textContent = ${JSON.stringify(item.texto)}; this.style.display = "none";'>Ler mais</button>` : ''}
                         ${item.print ? `<p>Print: <a href="${item.print}" style="color:#7CFF9B;" target="_blank" rel="noopener noreferrer">Clique aqui</a></p>` : ''}
-                        ${acoesAdm}
+                        ${botoesAcaoRelatorio(item)}
                     </div>
                 </div>
             </div>`;
@@ -893,6 +1087,7 @@ function openModal(type, extra = null) {
 
     } else if (type === 'editar-relatorio') {
         const rel = extra;
+        if (!podeEditarRelatorio(rel)) { showToast('Sem permissão para editar este relatório.', 'error'); return; }
         titleEl.textContent = `EDITAR RELATÓRIO ${rel.id}`;
         bodyEl.innerHTML = `
             <div style="font-size:11px;color:#888;margin-bottom:8px;">ID: <strong style="color:#85e300;">${rel.id}</strong> | Autor: ${rel.autor} → ${rel.alvo}</div>
@@ -962,16 +1157,49 @@ function openModal(type, extra = null) {
 
     } else if (type === 'manage-roles') {
         titleEl.textContent = 'GERENCIAR CARGOS';
+        const podEditar = isDIR();
+        const niveisLabel = { adm: 'ADM (total)', mod: 'MOD (painel, sem editar ADM)', leitura: 'Leitura apenas' };
         bodyEl.innerHTML = `
             <div style="background:rgba(133,227,0,0.1);border-radius:6px;padding:10px;font-size:12px;color:#ccc;margin-bottom:10px;">
                 <i class="ph ph-info" style="color:#85e300;margin-right:6px;"></i>
-                Os cargos são detectados automaticamente pelos grupos do fórum.
+                ${podEditar ? 'Apenas DIR pode alterar os níveis de acesso de cada grupo.' : 'Os cargos são detectados automaticamente pelos grupos do fórum. Apenas DIR pode editar.'}
             </div>
-            <div style="font-size:12px;color:#888;">Grupos com acesso:</div>
+            <div style="font-size:12px;color:#888;margin-bottom:8px;">Grupos com acesso:</div>
             <div style="margin-top:8px;">
-                ${GRUPOS.map(g => `<div style="padding:4px 0;font-size:12px;color:#ccc;"><span style="color:#85e300;font-weight:bold;">${g.tag}</span> — ${g.nome} ${g.isAdm ? '<span style="color:#85e300;font-size:10px;">(ADM)</span>' : '<span style="color:#ff8c00;font-size:10px;">(Leitura)</span>'}</div>`).join('')}
-            </div>`;
-        submitEl.style.display = 'none';
+                ${GRUPOS.map(g => `
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,0.06);">
+                    <div>
+                        <span style="color:#85e300;font-weight:bold;">${g.tag}</span>
+                        <span style="color:#ccc;font-size:11px;margin-left:8px;">${g.nome}</span>
+                    </div>
+                    ${podEditar
+                        ? `<select data-chave="${g.chave}" class="grupo-nivel-select" style="background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:6px;padding:4px 8px;font-size:11px;font-family:Poppins,sans-serif;">
+                            ${NIVEIS.map(n => `<option value="${n}" ${g.nivel===n?'selected':''}>${niveisLabel[n]}</option>`).join('')}
+                           </select>`
+                        : `<span style="font-size:10px;color:${g.nivel==='adm'?'#85e300':g.nivel==='mod'?'#ffa502':'#ff8c00'};">${niveisLabel[g.nivel]||g.nivel}</span>`
+                    }
+                </div>`).join('')}
+            </div>
+            ${podEditar ? '<div style="font-size:10px;color:#666;margin-top:10px;"><i class="ph ph-warning" style="color:#ffa502;"></i> ADM prevalece sobre MOD/Leitura se o usuário tiver múltiplos grupos.</div>' : ''}`;
+
+        if (podEditar) {
+            submitEl.style.display = '';
+            submitEl.onclick = async () => {
+                const selects = bodyEl.querySelectorAll('.grupo-nivel-select');
+                DADOS.config_grupos = DADOS.config_grupos || {};
+                selects.forEach(sel => {
+                    const chave = sel.getAttribute('data-chave');
+                    DADOS.config_grupos[chave] = { nivel: sel.value };
+                    registrarLog({ tipo: 'config_grupo', chave, tag: GRUPOS.find(g=>g.chave===chave)?.tag||chave, nivel: sel.value, responsavel: USUARIO_ATUAL });
+                });
+                aplicarConfigGrupos();
+                const sucesso = await salvarDados();
+                if (sucesso) { showToast('Configurações de grupo salvas!'); closeModal(); atualizarInterfaceAcesso(); atualizarTodasInterfaces(); }
+                else showToast('Erro ao salvar configurações.', 'error');
+            };
+        } else {
+            submitEl.style.display = 'none';
+        }
 
     } else if (type === 'transferir-responsabilidade') {
         const nickPre = extra?.nick || '';
@@ -1018,7 +1246,7 @@ function openModal(type, extra = null) {
         };
     }
 
-    submitEl.style.display = type === 'manage-roles' ? 'none' : '';
+    submitEl.style.display = (type === 'manage-roles' && !isDIR()) ? 'none' : '';
     overlay.style.display = 'flex';
     document.getElementById('modal-cancel').onclick = closeModal;
 }
@@ -1056,6 +1284,9 @@ function switchPage(pageId) {
     const titles = { dashboard: 'CONTROLE DE INFORMAÇÕES', search: 'POSTAGENS', info: 'INFORMAÇÕES' };
     const titleEl = document.getElementById('mob-topbar-title');
     if (titleEl) titleEl.textContent = titles[pageId] || '';
+
+    registrarLog({ tipo: 'nav_pagina', nick: USUARIO_ATUAL, pagina: pageId, responsavel: USUARIO_ATUAL });
+    salvarDados();
 }
 
 function setHeaderTitle(text) {
@@ -1073,6 +1304,8 @@ function openProfile(user) {
     setHeaderTitle(user);
     fixLayoutWidthToHeader('profile-page');
     renderProfileSidebar(); renderProfileFeed(); renderProfilePagination();
+    registrarLog({ tipo: 'nav_pagina', nick: USUARIO_ATUAL, pagina: `perfil:${user}`, responsavel: USUARIO_ATUAL });
+    salvarDados();
 }
 
 function openAdminPanel() {
@@ -1090,14 +1323,22 @@ function openAdminPanel() {
     document.getElementById('mobitem-admin')?.classList.add('active');
     const titleEl = document.getElementById('mob-topbar-title');
     if (titleEl) titleEl.textContent = 'PAINEL DE CONTROLE';
+
+    registrarLog({ tipo: 'nav_pagina', nick: USUARIO_ATUAL, pagina: 'admin', responsavel: USUARIO_ATUAL });
+    salvarDados();
 }
 
 function initSearch(mode) {
     const input = document.getElementById(`nickname-input-${mode}`);
     input.addEventListener('keyup', (e) => {
         if (e.key === 'Enter') {
-            state[mode].filter = input.value;
+            const query = input.value.trim();
+            state[mode].filter = query;
             state[mode].page = 1;
+            if (query) {
+                registrarLog({ tipo: 'busca', nick: USUARIO_ATUAL, query, modo: mode, responsavel: USUARIO_ATUAL });
+                salvarDados();
+            }
             renderFeed(mode); renderPagination(mode); renderProfile(mode);
         }
     });
@@ -1117,9 +1358,14 @@ function fixLayoutWidthToHeader(pageId) {
     feed.style.width = `${Math.round(feedWidth)}px`;
 }
 
-window.excluirRelatorio = async (id) => { await excluirRelatorio(id); atualizarTodasInterfaces(); };
+window.excluirRelatorio = async (id) => {
+    const rel = DADOS.relatorios.find(r => r.id === id);
+    if (!podeExcluirRelatorio(rel)) { showToast('Sem permissão para excluir este relatório.', 'error'); return; }
+    await excluirRelatorio(id); atualizarTodasInterfaces();
+};
 window.abrirEdicaoRelatorio = (id) => { const rel = DADOS.relatorios.find(r => r.id === id); if (!rel) return; openModal('editar-relatorio', rel); };
 window.abrirTransferenciaResponsavel = (nick) => openModal('transferir-responsabilidade', { nick });
+window.excluirExecutivoDireto = async (nick) => { await excluirExecutivo(nick, USUARIO_ATUAL); atualizarTodasInterfaces(); };
 window.openModal = openModal;
 window.closeModal = closeModal;
 window.openProfile = openProfile;
@@ -1160,7 +1406,6 @@ async function init() {
             }
         }
 
-        // Desktop drawer
         const drawer = document.getElementById('side-drawer');
         const overlayEl = document.getElementById('drawer-overlay');
         const openBtn = document.getElementById('hamburger-btn');
