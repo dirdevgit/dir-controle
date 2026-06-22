@@ -6,13 +6,13 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/fireba
 import { getDatabase, ref, get, set, onValue, update } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 const firebaseConfig = {
-    apiKey: "AIzaSyA5t1hamctvHaL9N0p93CT6922GsdgKySM",
-    authDomain: "dir-controle.firebaseapp.com",
-    databaseURL: "https://dir-controle-default-rtdb.firebaseio.com",
-    projectId: "dir-controle",
-    storageBucket: "dir-controle.firebasestorage.app",
-    messagingSenderId: "234991247921",
-    appId: "1:234991247921:web:a6e700075a5dc73eb02b10"
+  apiKey: "AIzaSyAzqWlkuN6b8nPk2wqpb28w2P6OwPbm9Kw",
+  authDomain: "dir-controle-3d245.firebaseapp.com",
+  databaseURL: "https://dir-controle-3d245-default-rtdb.firebaseio.com",
+  projectId: "dir-controle-3d245",
+  storageBucket: "dir-controle-3d245.firebasestorage.app",
+  messagingSenderId: "602548274472",
+  appId: "1:602548274472:web:b30d9a6a2552badc1ffc1d"
 };
 
 const app = initializeApp(firebaseConfig);
